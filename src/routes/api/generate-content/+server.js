@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { OPENAI_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 export async function POST({ request }) {
 	try {
@@ -9,6 +9,8 @@ export async function POST({ request }) {
 			return json({ error: '이미지와 콘텐츠 타입이 필요합니다.' }, { status: 400 });
 		}
 
+		const OPENAI_API_KEY = env.OPENAI_API_KEY;
+		
 		if (!OPENAI_API_KEY) {
 			return json({ error: 'OpenAI API 키가 설정되지 않았습니다.' }, { status: 500 });
 		}
@@ -65,7 +67,7 @@ export async function POST({ request }) {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${OPENAI_API_KEY}`
+				'Authorization': `Bearer ${env.OPENAI_API_KEY}`
 			},
 			body: JSON.stringify({
 				model: 'gpt-4o',
