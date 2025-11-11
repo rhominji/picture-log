@@ -19,6 +19,9 @@
 	// 상세 보기 모달
 	let showDetailModal = $state(false);
 	let selectedPicture = $state(null);
+	let editedContent = $state('');
+	let savingContent = $state(false);
+	let deletingPicture = $state(false);
 	
 	onMount(() => {
 		loadPictures();
@@ -66,12 +69,78 @@
 	
 	function openDetailModal(picture) {
 		selectedPicture = picture;
+		editedContent = picture.content || '';
 		showDetailModal = true;
 	}
 	
 	function closeDetailModal() {
 		showDetailModal = false;
 		selectedPicture = null;
+		editedContent = '';
+	}
+	
+	async function saveContent() {
+		if (!selectedPicture || !editedContent.trim()) return;
+		
+		savingContent = true;
+		error = null;
+		
+		try {
+			const { error: err } = await supabase
+				.from('picture_logs')
+				.update({ content: editedContent.trim() })
+				.eq('id', selectedPicture.id);
+			
+			if (err) throw err;
+			
+			await loadPictures();
+			closeDetailModal();
+		} catch (err) {
+			console.error('콘텐츠 저장 실패:', err);
+			error = err.message || '콘텐츠 저장에 실패했습니다.';
+		} finally {
+			savingContent = false;
+		}
+	}
+	
+	async function deletePicture() {
+		if (!selectedPicture) return;
+		
+		if (!confirm('이 사진과 함께 저장된 글을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+			return;
+		}
+		
+		deletingPicture = true;
+		error = null;
+		
+		try {
+			// Storage에서 이미지 삭제
+			if (selectedPicture.image_path) {
+				const { error: storageErr } = await supabase.storage
+					.from('pictures')
+					.remove([selectedPicture.image_path]);
+				
+				if (storageErr) {
+					console.warn('이미지 삭제 실패 (계속 진행):', storageErr);
+				}
+			}
+			
+			// 데이터베이스에서 레코드 삭제
+			const { error: dbErr } = await supabase
+				.from('picture_logs')
+				.delete()
+				.eq('id', selectedPicture.id);
+			
+			if (dbErr) throw dbErr;
+			
+			await loadPictures();
+			closeDetailModal();
+		} catch (err) {
+			console.error('사진 삭제 실패:', err);
+			error = err.message || '사진 삭제에 실패했습니다.';
+		} finally {
+			deletingPicture = false;
+		}
 	}
 	
 	function getImageUrl(imagePath) {
@@ -277,12 +346,32 @@
 					</div>
 				{/if}
 				
-				<!-- 컨텐츠 -->
+				<!-- 컨텐츠 수정 -->
 				<div class="mb-6">
 					<div class="text-sm font-semibold text-gray-700 mb-2">📝 저장된 글</div>
-					<div class="bg-gray-50 p-4 rounded-lg whitespace-pre-wrap text-gray-800">
-						{selectedPicture.content}
-					</div>
+					{#if selectedPicture.content_type === 'oneLine'}
+						<input
+							type="text"
+							bind:value={editedContent}
+							placeholder="한 줄로 감상을 적어주세요..."
+							class="w-full px-4 py-2 border border-sky-200 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400 bg-white/50"
+							maxlength="100"
+						/>
+					{:else if selectedPicture.content_type === 'keywords'}
+						<input
+							type="text"
+							bind:value={editedContent}
+							placeholder="키워드를 쉼표로 구분하여 입력하세요"
+							class="w-full px-4 py-2 border border-sky-200 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400 bg-white/50"
+						/>
+					{:else}
+						<textarea
+							bind:value={editedContent}
+							placeholder="글을 작성해주세요..."
+							class="w-full px-4 py-2 border border-sky-200 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400 bg-white/50"
+							rows="8"
+						></textarea>
+					{/if}
 				</div>
 				
 				<!-- 사용자 입력 -->
@@ -304,6 +393,34 @@
 						</div>
 					</div>
 				{/if}
+				
+				<!-- 버튼 -->
+				<div class="flex gap-3 justify-end">
+					<button
+						type="button"
+						onclick={closeDetailModal}
+						disabled={savingContent || deletingPicture}
+						class="px-4 py-2 border border-sky-200 text-sky-700 rounded-lg font-semibold hover:bg-sky-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-white/50"
+					>
+						취소
+					</button>
+					<button
+						type="button"
+						onclick={deletePicture}
+						disabled={deletingPicture || savingContent}
+						class="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+					>
+						{deletingPicture ? '삭제 중...' : '🗑️ 삭제'}
+					</button>
+					<button
+						type="button"
+						onclick={saveContent}
+						disabled={savingContent || !editedContent.trim() || deletingPicture}
+						class="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-500 text-white rounded-lg font-semibold hover:from-teal-600 hover:to-cyan-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg"
+					>
+						{savingContent ? '저장 중...' : '💾 저장'}
+					</button>
+				</div>
 			</div>
 		</div>
 	</div>

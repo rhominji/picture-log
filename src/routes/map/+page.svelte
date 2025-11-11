@@ -15,6 +15,13 @@
 	let detailLocation = $state(null);
 	let detailScore = $state(null);
 	
+	// 사진 수정 모달
+	let showEditModal = $state(false);
+	let editingPicture = $state(null);
+	let editedContent = $state('');
+	let savingContent = $state(false);
+	let deletingPicture = $state(false);
+	
 	onMount(async () => {
 		if (!browser) return;
 		await loadPictures();
@@ -243,6 +250,82 @@
 		});
 	}
 	
+	function openEditModal(picture) {
+		editingPicture = picture;
+		editedContent = picture.content || '';
+		showEditModal = true;
+	}
+	
+	function closeEditModal() {
+		showEditModal = false;
+		editingPicture = null;
+		editedContent = '';
+	}
+	
+	async function saveContent() {
+		if (!editingPicture || !editedContent.trim()) return;
+		
+		savingContent = true;
+		error = null;
+		
+		try {
+			const { error: err } = await supabase
+				.from('picture_logs')
+				.update({ content: editedContent.trim() })
+				.eq('id', editingPicture.id);
+			
+			if (err) throw err;
+			
+			await loadPictures();
+			closeEditModal();
+		} catch (err) {
+			console.error('콘텐츠 저장 실패:', err);
+			error = err.message || '콘텐츠 저장에 실패했습니다.';
+		} finally {
+			savingContent = false;
+		}
+	}
+	
+	async function deletePicture() {
+		if (!editingPicture) return;
+		
+		if (!confirm('이 사진과 함께 저장된 글을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+			return;
+		}
+		
+		deletingPicture = true;
+		error = null;
+		
+		try {
+			// Storage에서 이미지 삭제
+			if (editingPicture.image_path) {
+				const { error: storageErr } = await supabase.storage
+					.from('pictures')
+					.remove([editingPicture.image_path]);
+				
+				if (storageErr) {
+					console.warn('이미지 삭제 실패 (계속 진행):', storageErr);
+				}
+			}
+			
+			// 데이터베이스에서 레코드 삭제
+			const { error: dbErr } = await supabase
+				.from('picture_logs')
+				.delete()
+				.eq('id', editingPicture.id);
+			
+			if (dbErr) throw dbErr;
+			
+			await loadPictures();
+			closeEditModal();
+		} catch (err) {
+			console.error('사진 삭제 실패:', err);
+			error = err.message || '사진 삭제에 실패했습니다.';
+		} finally {
+			deletingPicture = false;
+		}
+	}
+	
 	// locationGroups가 변경되면 마커 업데이트
 	$effect(() => {
 		if (map && L && locationGroups.size > 0) {
@@ -408,6 +491,144 @@
 						</div>
 					</div>
 				{/each}
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- 사진 수정 모달 -->
+{#if showEditModal && editingPicture}
+	<div
+		class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+		onclick={closeEditModal}
+		role="dialog"
+		aria-modal="true"
+	>
+		<div
+			class="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto"
+			onclick={(e) => e.stopPropagation()}
+		>
+			<!-- 모달 헤더 -->
+			<div class="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+				<div>
+					<h2 class="text-xl font-bold text-gray-900">
+						{getContentTypeLabel(editingPicture.content_type)}
+					</h2>
+					<p class="text-sm text-gray-500 mt-1">
+						{formatDate(editingPicture.created_at)}
+					</p>
+				</div>
+				<button
+					type="button"
+					onclick={closeEditModal}
+					class="text-gray-400 hover:text-gray-600 text-2xl"
+				>
+					×
+				</button>
+			</div>
+			
+			<!-- 모달 내용 -->
+			<div class="p-6">
+				<!-- 이미지 -->
+				<div class="mb-6">
+					<img
+						src={getImageUrl(editingPicture.image_path)}
+						alt="사진"
+						class="w-full rounded-lg shadow-md"
+						onerror={handleImageError}
+					/>
+				</div>
+				
+				<!-- 점수 -->
+				{#if editingPicture.score}
+					<div class="mb-6 p-4 bg-gradient-to-r from-amber-50 via-yellow-50 to-lime-50 border-2 border-amber-200 rounded-lg">
+						<div class="flex items-center justify-between">
+							<div>
+								<div class="text-sm font-semibold text-amber-700 mb-1">⭐ 그날의 점수</div>
+							</div>
+							<div class="text-4xl font-bold bg-gradient-to-r from-amber-500 to-yellow-500 bg-clip-text text-transparent">
+								{editingPicture.score}
+								<span class="text-lg text-amber-400">/10</span>
+							</div>
+						</div>
+					</div>
+				{/if}
+				
+				<!-- 콘텐츠 수정 -->
+				<div class="mb-6">
+					<div class="text-sm font-semibold text-gray-700 mb-2">📝 저장된 글</div>
+					{#if editingPicture.content_type === 'oneLine'}
+						<input
+							type="text"
+							bind:value={editedContent}
+							placeholder="한 줄로 감상을 적어주세요..."
+							class="w-full px-4 py-2 border border-sky-200 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400 bg-white/50"
+							maxlength="100"
+						/>
+					{:else if editingPicture.content_type === 'keywords'}
+						<input
+							type="text"
+							bind:value={editedContent}
+							placeholder="키워드를 쉼표로 구분하여 입력하세요"
+							class="w-full px-4 py-2 border border-sky-200 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400 bg-white/50"
+						/>
+					{:else}
+						<textarea
+							bind:value={editedContent}
+							placeholder="글을 작성해주세요..."
+							class="w-full px-4 py-2 border border-sky-200 rounded-lg focus:ring-2 focus:ring-sky-400 focus:border-sky-400 bg-white/50"
+							rows="8"
+						></textarea>
+					{/if}
+				</div>
+				
+				<!-- 사용자 입력 -->
+				{#if editingPicture.user_input}
+					<div class="mb-6">
+						<div class="text-sm font-semibold text-gray-700 mb-2">💡 추가 키워드/내용</div>
+						<div class="bg-blue-50 p-4 rounded-lg text-gray-800">
+							{editingPicture.user_input}
+						</div>
+					</div>
+				{/if}
+				
+				<!-- 추가 텍스트 -->
+				{#if editingPicture.additional_text}
+					<div class="mb-6">
+						<div class="text-sm font-semibold text-gray-700 mb-2">📄 추가 메모</div>
+						<div class="bg-green-50 p-4 rounded-lg whitespace-pre-wrap text-gray-800">
+							{editingPicture.additional_text}
+						</div>
+					</div>
+				{/if}
+				
+				<!-- 버튼 -->
+				<div class="flex gap-3 justify-end">
+					<button
+						type="button"
+						onclick={closeEditModal}
+						disabled={savingContent || deletingPicture}
+						class="px-4 py-2 border border-sky-200 text-sky-700 rounded-lg font-semibold hover:bg-sky-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-white/50"
+					>
+						취소
+					</button>
+					<button
+						type="button"
+						onclick={deletePicture}
+						disabled={deletingPicture || savingContent}
+						class="px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+					>
+						{deletingPicture ? '삭제 중...' : '🗑️ 삭제'}
+					</button>
+					<button
+						type="button"
+						onclick={saveContent}
+						disabled={savingContent || !editedContent.trim() || deletingPicture}
+						class="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-500 text-white rounded-lg font-semibold hover:from-teal-600 hover:to-cyan-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg"
+					>
+						{savingContent ? '저장 중...' : '💾 저장'}
+					</button>
+				</div>
 			</div>
 		</div>
 	</div>
