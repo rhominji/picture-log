@@ -3,7 +3,30 @@ import { env } from '$env/dynamic/private';
 
 export async function POST({ request }) {
 	try {
-		const { imageBase64, contentType, imageMetadata, userInput, additionalText } = await request.json();
+		// 요청 크기 확인
+		const contentLength = request.headers.get('content-length');
+		if (contentLength && parseInt(contentLength) > 4.5 * 1024 * 1024) {
+			return json(
+				{ error: '이미지가 너무 큽니다. 더 작은 이미지를 사용해주세요. (권장: 3MB 이하)' },
+				{ status: 413 }
+			);
+		}
+
+		let requestData;
+		try {
+			requestData = await request.json();
+		} catch (parseError) {
+			// JSON 파싱 실패 시 (413 에러로 인한 경우)
+			if (parseError.message?.includes('413') || contentLength > 4.5 * 1024 * 1024) {
+				return json(
+					{ error: '이미지가 너무 큽니다. 더 작은 이미지를 사용해주세요. (권장: 3MB 이하)' },
+					{ status: 413 }
+				);
+			}
+			throw parseError;
+		}
+
+		const { imageBase64, contentType, imageMetadata, userInput, additionalText } = requestData;
 
 		if (!imageBase64 || !contentType) {
 			return json({ error: '이미지와 콘텐츠 타입이 필요합니다.' }, { status: 400 });
@@ -155,6 +178,15 @@ export async function POST({ request }) {
 		return json({ content: generatedContent, score });
 	} catch (error) {
 		console.error('OpenAI API 오류:', error);
+		
+		// 413 에러 처리
+		if (error.message?.includes('413') || error.message?.includes('Payload Too Large')) {
+			return json(
+				{ error: '이미지가 너무 큽니다. 더 작은 이미지를 사용해주세요. (권장: 3MB 이하)' },
+				{ status: 413 }
+			);
+		}
+		
 		return json(
 			{ error: error.message || '콘텐츠 생성에 실패했습니다.' },
 			{ status: 500 }

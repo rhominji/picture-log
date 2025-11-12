@@ -149,18 +149,97 @@
 		generationError = null;
 	}
 
-	// 이미지를 base64로 변환
-	function fileToBase64(file) {
+	// 이미지 리사이징 및 압축
+	function resizeImage(file, maxWidth = 1920, maxHeight = 1920, quality = 0.85) {
 		return new Promise((resolve, reject) => {
 			const reader = new FileReader();
-			reader.onload = () => {
-				// data:image/jpeg;base64, 부분 제거
-				const base64 = reader.result.split(',')[1];
-				resolve(base64);
+			reader.onload = (e) => {
+				const img = new Image();
+				img.onload = () => {
+					const canvas = document.createElement('canvas');
+					let width = img.width;
+					let height = img.height;
+
+					// 비율 유지하며 리사이징
+					if (width > maxWidth || height > maxHeight) {
+						if (width > height) {
+							height = (height * maxWidth) / width;
+							width = maxWidth;
+						} else {
+							width = (width * maxHeight) / height;
+							height = maxHeight;
+						}
+					}
+
+					canvas.width = width;
+					canvas.height = height;
+
+					const ctx = canvas.getContext('2d');
+					ctx.drawImage(img, 0, 0, width, height);
+
+					// JPEG로 변환 (압축)
+					canvas.toBlob(
+						(blob) => {
+							if (blob) {
+								resolve(blob);
+							} else {
+								reject(new Error('이미지 변환에 실패했습니다.'));
+							}
+						},
+						'image/jpeg',
+						quality
+					);
+				};
+				img.onerror = reject;
+				img.src = e.target.result;
 			};
 			reader.onerror = reject;
 			reader.readAsDataURL(file);
 		});
+	}
+
+	// 이미지를 base64로 변환
+	async function fileToBase64(file) {
+		try {
+			// 이미지 크기 확인 (5MB 이상이면 리사이징)
+			const maxSize = 5 * 1024 * 1024; // 5MB
+			
+			let processedFile = file;
+			
+			// 이미지 파일이고 크기가 제한을 초과하면 리사이징
+			if (file.type.startsWith('image/') && file.size > maxSize) {
+				processedFile = await resizeImage(file, 1920, 1920, 0.85);
+			}
+
+			return new Promise((resolve, reject) => {
+				const reader = new FileReader();
+				reader.onload = () => {
+					// data:image/jpeg;base64, 부분 제거
+					const base64 = reader.result.split(',')[1];
+					
+					// base64 크기 확인 (약 4MB 제한)
+					const base64Size = (base64.length * 3) / 4;
+					if (base64Size > 4 * 1024 * 1024) {
+						// 더 작게 리사이징
+						resizeImage(file, 1280, 1280, 0.75).then((resizedBlob) => {
+							const resizedReader = new FileReader();
+							resizedReader.onload = () => {
+								const resizedBase64 = resizedReader.result.split(',')[1];
+								resolve(resizedBase64);
+							};
+							resizedReader.onerror = reject;
+							resizedReader.readAsDataURL(resizedBlob);
+						}).catch(reject);
+					} else {
+						resolve(base64);
+					}
+				};
+				reader.onerror = reject;
+				reader.readAsDataURL(processedFile);
+			});
+		} catch (error) {
+			throw new Error('이미지 처리 중 오류가 발생했습니다: ' + error.message);
+		}
 	}
 
 	// OpenAI를 사용하여 콘텐츠 생성
@@ -194,7 +273,24 @@
 			})
 			});
 
-			const data = await response.json();
+			// 413 에러 확인
+			if (response.status === 413) {
+				throw new Error('이미지가 너무 큽니다. 더 작은 이미지를 사용해주세요. (권장: 3MB 이하)');
+			}
+
+			// 응답 텍스트 먼저 읽기
+			const responseText = await response.text();
+			
+			let data;
+			try {
+				data = JSON.parse(responseText);
+			} catch (jsonError) {
+				// JSON 파싱 실패 시
+				if (response.status === 413) {
+					throw new Error('이미지가 너무 큽니다. 더 작은 이미지를 사용해주세요. (권장: 3MB 이하)');
+				}
+				throw new Error(`서버 응답 오류: ${responseText.substring(0, 100)}`);
+			}
 
 			if (!response.ok) {
 				throw new Error(data.error || '콘텐츠 생성에 실패했습니다.');
@@ -206,7 +302,15 @@
 
 		} catch (error) {
 			console.error('콘텐츠 생성 실패:', error);
-			generationError = error.message || '콘텐츠 생성에 실패했습니다.';
+			
+			// 413 에러 처리
+			if (error.message?.includes('413') || error.message?.includes('Payload Too Large')) {
+				generationError = '이미지가 너무 큽니다. 더 작은 이미지를 사용해주세요. (권장: 3MB 이하)';
+			} else if (error.message?.includes('JSON')) {
+				generationError = '서버 응답 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+			} else {
+				generationError = error.message || '콘텐츠 생성에 실패했습니다.';
+			}
 		} finally {
 			generating = false;
 		}
