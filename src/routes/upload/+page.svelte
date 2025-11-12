@@ -249,9 +249,17 @@
 				content: editedContent.trim(), // 수정된 콘텐츠 저장
 				additional_text: additionalText.trim() || null,
 				user_input: userInput.trim() || null, // 사용자가 입력한 키워드/내용
-				score: dailyScore, // 그날의 점수
 				created_at: new Date().toISOString()
 			};
+			
+			// 오늘의 점수가 있으면 함께 저장
+			if (dailyScore !== null && dailyScore !== undefined) {
+				// 점수가 1-10 범위인지 확인
+				const scoreValue = Number(dailyScore);
+				if (!isNaN(scoreValue) && scoreValue >= 1 && scoreValue <= 10) {
+					insertData.score = scoreValue;
+				}
+			}
 			
 			// GPS 정보가 있을 때만 추가
 			if (latitude !== null && longitude !== null) {
